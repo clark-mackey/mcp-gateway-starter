@@ -7,7 +7,7 @@ Companion to [README.md](README.md). Same steps, with the *why* for each.
 - Python 3.11+
 - `uv` (recommended) or `pip`
 - A GitHub account
-- A Railway account (~$5/month hobby tier; free trial available)
+- An account on a hosting provider — Render (free tier, no card), Railway (~$5/month), or Google Cloud Run (free tier, card required)
 - Optional: Node.js + npm if you want the Railway CLI
 
 ## Step 1 — Clone and run locally
@@ -66,7 +66,35 @@ You should see your three tools (`list_notes`, `read_note`, `search_notes`) list
 
 If the connection fails: check your bearer token matches `MCP_API_KEY` exactly, including no extra whitespace.
 
-## Step 4 — Deploy to Railway
+## Step 4 — Deploy
+
+Three paths. The gateway code is identical on all of them — only the deploy commands differ. Pick one.
+
+### Path A — Render (recommended)
+
+Render has the gentlest learning curve for non-devs: web UI, GitHub auto-deploy, real free tier, no credit card.
+
+1. Push this repo to your own GitHub account (`gh repo create` or via github.com).
+2. Sign up at [render.com](https://render.com) (GitHub login works).
+3. **New → Web Service → Connect your repo**.
+4. Render auto-detects Python. Confirm these settings:
+   - **Build command:** `pip install -r requirements.txt`
+   - **Start command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. Under **Environment**, add:
+   - `AUTH_MODE` = `bearer`
+   - `MCP_API_KEY` = a fresh random string (`openssl rand -hex 32`)
+6. **Create Web Service**. First build takes 3–5 minutes.
+
+When it's live, Render shows the URL (`https://your-gateway.onrender.com`). Verify:
+
+```bash
+curl https://your-gateway.onrender.com/health
+# -> {"status":"ok","auth_mode":"bearer"}
+```
+
+Free-tier note: the service sleeps after ~15 minutes idle and takes ~60s to wake. That breaks Claude.ai connector handshakes on a cold hit. For Claude.ai production use, upgrade to the $7/mo Starter plan (always on).
+
+### Path B — Railway
 
 Install the Railway CLI if you don't have it:
 
@@ -95,6 +123,33 @@ curl https://your-gateway.up.railway.app/health
 ```
 
 If the health check fails, run `railway logs` to see why.
+
+### Path C — Google Cloud Run
+
+Cloud Run scales to zero and gives you 2M requests/month free. Setup is CLI-heavy but a single command once configured.
+
+1. Install the [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud init` (creates a project, enables billing — billing card required, but you won't be charged at low traffic).
+2. Enable Cloud Run: `gcloud services enable run.googleapis.com cloudbuild.googleapis.com`.
+3. Deploy from the repo root:
+
+```bash
+gcloud run deploy mcp-gateway \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars AUTH_MODE=bearer,MCP_API_KEY=$(openssl rand -hex 32)
+```
+
+Cloud Build will detect Python, containerize, and push. Takes 3–6 minutes the first time. The CLI prints your URL (`https://mcp-gateway-xxxxx-uc.a.run.app`).
+
+Verify:
+
+```bash
+curl https://mcp-gateway-xxxxx-uc.a.run.app/health
+# -> {"status":"ok","auth_mode":"bearer"}
+```
+
+Cold starts on Cloud Run are ~2–3s (much faster than Render free tier), and scale-to-zero means you pay nothing when idle.
 
 ## Step 5 — Connect from your AI client
 
@@ -142,6 +197,8 @@ Claude.ai requires OAuth — bearer mode won't work. Continue to "Adding OAuth f
 ## Adding OAuth for Claude.ai
 
 Claude.ai Custom Connectors use OAuth 2.0 with Dynamic Client Registration (DCR). The gateway already has the machinery; you just switch modes and provide two more env vars.
+
+> The commands below show Railway syntax. The env vars themselves (`AUTH_MODE`, `OAUTH_ISSUER_URL`, `OAUTH_JWT_SECRET`) are identical on every host — set them through Render's Environment tab, the `gcloud run services update --set-env-vars` flag, or whichever host you picked.
 
 ### Step A — Generate a JWT secret
 
@@ -195,19 +252,16 @@ In any new Claude.ai conversation, the tools are now available. Try: *"list my n
 
 ## Costs
 
-Railway hobby tier pricing (as of 2026):
+Low-traffic single-user gateway (a few requests per hour, ~150 MB memory, ~0.05 vCPU avg):
 
-- **$5/month minimum** for any running service (this includes ~500 hours of compute)
-- **~$0.000463/GB-hour** of memory above the included quota
-- **~$0.000231/vCPU-hour** above the included quota
+| Host | Cost | Notes |
+|---|---|---|
+| **Render free** | $0 | Sleeps after ~15 min idle; cold start ~60s. Fine for testing, breaks Claude.ai connectors. |
+| **Render Starter** | $7/month | Always on. Good production default if you don't already use Railway. |
+| **Railway hobby** | ~$5/month | Always on. $5/mo minimum includes ~500 compute hours, plenty for this. |
+| **Cloud Run** | $0–1/month | Free under 2M req/mo. Card required even if you stay free. |
 
-For a low-traffic MCP gateway (a few requests per hour, single user):
-
-- Memory: ~150 MB → well within free quota
-- CPU: ~0.05 vCPU average → well within free quota
-- **Expected monthly cost: $5–7**
-
-If you scale to a paid product with hundreds of users, you'll outgrow the hobby tier. At that point: Pro tier (~$20/month) or move to a larger Railway service. The starter is designed for single-tenant or small-multi-tenant use; for SaaS scale, you'd want a different architecture anyway (per-tenant isolation, dedicated Postgres, etc.).
+If you scale to a paid product with hundreds of users, the starter's single-tenant architecture is the wrong shape regardless of host — you'd want per-tenant isolation, a real database, etc.
 
 ---
 

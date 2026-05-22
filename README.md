@@ -4,7 +4,9 @@ A minimal, teachable starter for an **MCP gateway** — a service that lets AI c
 
 This template wraps a folder of markdown notes and exposes three tools: `list_notes`, `read_note`, `search_notes`. You can swap the markdown layer for any data source (Postgres, Notion, your CRM, your CSV files) by replacing **one file** — `app/tools.py`.
 
-**~250 lines of Python. Deploys to Railway in 10 minutes. Two auth modes — bearer for local dev, OAuth for Claude.ai Custom Connectors.**
+**~250 lines of Python. Deploys anywhere Python runs — Render, Railway, Cloud Run — in about 10 minutes. Two auth modes: bearer for local dev, OAuth for Claude.ai Custom Connectors.**
+
+> **Prefer JavaScript?** Cloudflare's [`remote-mcp-authless` template](https://developers.cloudflare.com/agents/guides/remote-mcp-server/) is the slickest TS/Workers path — `npm create cloudflare@latest` and you're live. This repo is the **Python** path: readable code, OAuth+DCR in the open, swap one file to point at your data.
 
 ---
 
@@ -44,31 +46,56 @@ uvicorn app.main:app --reload --port 8000
 
 ---
 
-## Deploy to Railway (10 minutes)
+## Deploy
+
+Three documented paths. Pick one — the gateway itself is identical on all of them.
+
+### Option 1 — Render (recommended for most people)
+
+Render is the easiest path: same one-click GitHub flow as Railway, **real free tier, no credit card required**, and Render auto-detects FastAPI.
+
+1. Push this repo to your own GitHub.
+2. At [render.com](https://render.com), **New → Web Service → connect your repo**.
+3. Build command: `pip install -r requirements.txt`. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+4. Environment variables: `AUTH_MODE=bearer` and `MCP_API_KEY=<a random 64-char string>`.
+5. Deploy. You get an HTTPS URL like `https://your-gateway.onrender.com`.
+
+Heads up: Render's free tier spins down after ~15 minutes idle (cold start ~60 seconds on next request). Fine for testing; upgrade to the $7/month Starter if you connect this to Claude.ai for production use — connector handshakes will time out on a cold start.
+
+### Option 2 — Railway
 
 ```bash
-# 1. Install Railway CLI (one time)
 npm i -g @railway/cli && railway login
+railway init                                                    # create project
+railway up                                                      # deploy
+railway variables --set AUTH_MODE=bearer
+railway variables --set "MCP_API_KEY=$(openssl rand -hex 32)"
+railway domain                                                  # public URL
+```
 
-# 2. From this repo
-railway init                    # creates a Railway project
-railway up                      # deploys
+Railway's hobby tier runs ~$5/month and doesn't sleep — worth it once you're using the gateway for real. Full walkthrough in [SETUP.md](SETUP.md).
 
-# 3. Set env vars
-railway variables set AUTH_MODE=bearer
-railway variables set MCP_API_KEY="$(openssl rand -hex 32)"
+### Option 3 — Google Cloud Run
 
-# 4. Generate a public URL
-railway domain                  # prints e.g. https://your-gateway.up.railway.app
+Generous free tier (2M requests/month, scale-to-zero). One command from the repo root:
 
-# 5. Test
-curl https://your-gateway.up.railway.app/health
+```bash
+gcloud run deploy mcp-gateway --source . --region us-central1 --allow-unauthenticated \
+  --set-env-vars AUTH_MODE=bearer,MCP_API_KEY=$(openssl rand -hex 32)
+```
+
+Requires a GCP account with billing enabled (you won't be charged at low traffic, but Google requires a card on file).
+
+### Verifying any deploy
+
+```bash
+curl https://<your-url>/health
 #    -> {"status":"ok","auth_mode":"bearer"}
 ```
 
-You're now live. Your MCP endpoint is `https://your-gateway.up.railway.app/mcp/`. Point any MCP client at it; pass `Authorization: Bearer <your-MCP_API_KEY>`.
+Your MCP endpoint is `https://<your-url>/mcp/`. Any MCP client with `Authorization: Bearer <your MCP_API_KEY>` can use it.
 
-For **Claude.ai Custom Connectors**, you need OAuth — see [SETUP.md §Adding OAuth for Claude.ai](SETUP.md#adding-oauth-for-claudeai).
+For **Claude.ai Custom Connectors**, you need OAuth — see [SETUP.md §Adding OAuth for Claude.ai](SETUP.md#adding-oauth-for-claudeai). The OAuth env vars are the same regardless of which host you picked.
 
 ---
 
@@ -107,7 +134,13 @@ Start with bearer. Switch to OAuth when you're ready to wire it into Claude.ai.
 
 ## Cost estimate
 
-Railway hobby tier (~$5/month + ~$0.000463/GB-hour compute) runs this gateway comfortably under $5/month at low traffic. Scaling notes in SETUP.md §Costs.
+At low traffic (a few requests per hour):
+
+- **Render** — free tier (sleeps when idle) or $7/month Starter (always on)
+- **Railway** — ~$5/month hobby tier (always on, no sleep)
+- **Cloud Run** — effectively free under the 2M req/month free tier; pennies above
+
+Scaling notes in [SETUP.md §Costs](SETUP.md#costs).
 
 ---
 
@@ -122,4 +155,4 @@ Common next moves:
 - **Add an audit log.** A simple JSONL append at the start of each tool invocation gives you a tail you can review weekly.
 - **Multi-tenant.** Run one gateway per tenant on Railway, or one gateway with a `tenant_id` parameter on every tool. The starter ships single-tenant for clarity.
 
-For deeper context on what an MCP gateway is and how to teach this to a group, see [PRESENTATION.md](PRESENTATION.md).
+For deeper context on what an MCP gateway is and how to teach this to a group, see [PRESENTATION.md](PRESENTATION.md). For the upgrade path from single-user read-only to team write-with-review (PR-style), see [EVOLVE.md](EVOLVE.md).
